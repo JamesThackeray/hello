@@ -82,7 +82,8 @@ class PostgresStore:
     def __init__(self, database_url: str):
         import psycopg  # imported lazily so tests / --memory don't need a DB driver
 
-        self._conn = psycopg.connect(database_url, autocommit=True)
+        # Fail fast with a clear message instead of hanging if the database isn't up.
+        self._conn = psycopg.connect(database_url, autocommit=True, connect_timeout=10)
 
     def close(self) -> None:
         self._conn.close()

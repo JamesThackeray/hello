@@ -8,7 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import Settings
-from .decider import KeywordDecider, OllamaDecider
+from .decider import DecisionError, KeywordDecider, ollama_decider
 from .models import Suggestion
 from .recommender import Recommender
 from .store import MemoryStore, PostgresStore, load_csv
@@ -70,7 +70,16 @@ def cmd_chat(args: argparse.Namespace, settings: Settings) -> None:
     if args.decider == "keyword":
         decider = KeywordDecider()
     else:
-        decider = OllamaDecider(settings.ollama_host, settings.model, settings.ollama_timeout_s)
+        decider = ollama_decider(settings.ollama_host, settings.model, settings.ollama_timeout_s,
+                                 num_ctx=settings.ollama_num_ctx,
+                                 max_prompt_tokens=settings.max_prompt_tokens)
+        print(f"Loading {settings.model} in Ollama (the first load can take a minute)...",
+              flush=True)
+        try:
+            decider.prepare()
+        except DecisionError as e:
+            print(f"  ! {e}\n  ! using the offline keyword baseline for this session")
+            decider = KeywordDecider()
     rec = Recommender(store, decider, settings)
 
     user = args.user
@@ -100,7 +109,7 @@ def cmd_chat(args: argparse.Namespace, settings: Settings) -> None:
             if not items:
                 print("  (no history)")
             for h in items:
-                print(f"  {h.created_at:%Y-%m-%d %H:%M}  {h.query}")
+                print(f"  {h.created_at.astimezone():%Y-%m-%d %H:%M}  {h.query}")
         elif cmd == "/domains":
             for d in store.list_domains():
                 print(f"  {d.id:<18} {d.name} - {d.description}")

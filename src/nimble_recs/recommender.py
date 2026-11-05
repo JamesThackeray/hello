@@ -45,6 +45,15 @@ class Recommender:
         self.settings = settings
         self.fallback = fallback if fallback is not None else KeywordDecider()
 
+    def _context(self, query: str, previous: list[HistoryItem], task: str,
+                 options: list[Option], k: int) -> str:
+        # A decider that spreads options over several prompts (nimble: 26 per question)
+        # only needs the history to fit next to one prompt's worth of options. Measuring
+        # the whole list instead would throw away all history once a domain gets big.
+        per_prompt = getattr(self.decider, "options_per_prompt", None)
+        sample = options[:per_prompt] if per_prompt else options
+        return fit_context(query, previous, task, sample, k, self.settings.max_prompt_tokens)
+
     def _decide(self, task: str, context: str, options: list[Option], k: int,
                 notes: list[str]) -> tuple[Choice, bool]:
         try:
@@ -52,7 +61,9 @@ class Recommender:
         except DecisionError as e:
             if self.fallback is None or self.fallback is self.decider:
                 raise
-            notes.append(f"{self.decider.name} failed ({e}); used {self.fallback.name}")
+            note = f"{self.decider.name} failed ({e}); used {self.fallback.name}"
+            if note not in notes:  # both stages usually fail the same way; say it once
+                notes.append(note)
             return self.fallback.choose(task=task, context=context, options=options, k=k), True
 
     def suggest(self, user_id: str, query: str) -> Suggestion:
@@ -68,7 +79,7 @@ class Recommender:
         by_id = {d.id: d for d in domains}
         d_opts = [Option(d.id, f"{d.name} - {d.description}") for d in domains]
         d_k = min(s.top_domains, len(domains))
-        ctx = fit_context(query, previous, DOMAIN_TASK, d_opts, d_k, s.max_prompt_tokens)
+        ctx = self._context(query, previous, DOMAIN_TASK, d_opts, d_k)
         d_choice, fb1 = self._decide(DOMAIN_TASK, ctx, d_opts, d_k, notes)
         chosen_domains = [by_id[i] for i in d_choice.ids]
 
@@ -80,7 +91,7 @@ class Recommender:
         q_by_id = {q.id: q for q in questions}
         q_opts = [Option(q.id, q.text) for q in questions]
         q_k = min(s.num_suggestions, len(questions))
-        ctx = fit_context(query, previous, QUESTION_TASK, q_opts, q_k, s.max_prompt_tokens)
+        ctx = self._context(query, previous, QUESTION_TASK, q_opts, q_k)
         q_choice, fb2 = self._decide(QUESTION_TASK, ctx, q_opts, q_k, notes)
         chosen_qs = [q_by_id[i] for i in q_choice.ids]
 
